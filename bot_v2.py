@@ -20,6 +20,8 @@ openGetSeqName = False
 openGetPollResult = False
 openGetSurveyUserName = False
 openGetDeploySeqName = False
+openGetRemoveSeqName = False
+removeSeqName = None
 deploySeqName = None
 pollResExpected = []
 pollChosenMultiAnswers = []
@@ -56,7 +58,8 @@ adminButtons = Box({
     'discard': Button.inline('Discard Poll', b'poll_discard'),
     'save': Button.inline('Save Poll', b'save_poll'),
     'begin_survey': Button.inline('Start Survey', b'begin_survey'),
-    'multi_poll_submit': Button.inline('Submit Poll', b'multi_poll_submit')
+    'multi_poll_submit': Button.inline('Submit Poll', b'multi_poll_submit'),
+    'cancel_remove': Button.inline('Cancel Remove', b'cancel_remove')
 })
 
 init(autoreset=True)
@@ -76,7 +79,7 @@ client = TelegramClient('new', api_id, api_hash, proxy=(
 # #######################################################< Database Setup >#######################################################
 
 
-dbClient = MongoClient(conf.DB_URL, conf.DB_PORT)
+dbClient = MongoClient(conf.DB_URL)
 db = dbClient.seqDB         # Database
 allSeq = db.allSeq          # Collection for storing all the surveys
 allUsers = db.allUsers      # Users collection
@@ -87,20 +90,22 @@ allUsers = db.allUsers      # Users collection
 async def resetAllVars():
     global expectingQuestion, expectingAnswers, openGetSeqName, openGetPollResult
     global openGetSurveyUserName, openGetDeploySeqName, deploySeqName
-    global pollResExpected, pollChosenMultiAnswers, currentPollIndex
-    global pollsList, currentSurveyingUser, poll, status
+    global pollResExpected, pollChosenMultiAnswers, currentPollIndex, removeSeqName
+    global pollsList, currentSurveyingUser, poll, status, openGetRemoveSeqName
     expectingQuestion = False
     expectingAnswers = False
     openGetSeqName = False
     openGetPollResult = False
     openGetSurveyUserName = False
     openGetDeploySeqName = False
-    deploySeqName = ''
+    openGetRemoveSeqName = False
+    removeSeqName = None
+    deploySeqName = None
     pollResExpected = []
     pollChosenMultiAnswers = []
     currentPollIndex = 0
     pollsList = []
-    currentSurveyingUser = ''
+    currentSurveyingUser = None
     poll = Box({})
     status = Box({
         'inDeploy': False,
@@ -141,8 +146,9 @@ def create_button(name, data):
 
 
 async def fGetSeqName(msg):
-    global openGetSeqName
-    return openGetSeqName
+    if msg.message.from_id == conf.ADMIN_ID:
+        global openGetSeqName
+        return openGetSeqName
 
 
 @client.on(events.NewMessage(func=fGetSeqName))
@@ -365,6 +371,7 @@ def multiPollFilter(data):
 
 @client.on(events.CallbackQuery(data=multiPollFilter))
 async def multiPollSubmit(e):
+    await e.edit('Submitted!')
     user_id = e.query.user_id
     data = e.data
     data = data.decode()
@@ -427,6 +434,7 @@ async def getPollResult(e):
         allUsers.find_one_and_update({'user_id': user_id}, {'$set': user})
         await e.answer('Choose one or more then submit.')
     else:
+        await e.edit('Submitted!')
         # If poll is single answer poll.
         logging.info('Storing single poll ans.')
         poll = {
@@ -474,7 +482,13 @@ async def survey_user(user_id, seqName, poll_index):
 
 @client.on(events.CallbackQuery(data=b'list_users'))
 async def list_users(e):
-    listOfUsers = ['@ali', '@raza', '@suqlain', '@sufyan']
+    users = allUsers.find({})
+    if users:
+        listOfUsers = []
+        for user in users:
+            newUser = f'{dr}first_name: {user["first_name"]}{nl}user_id: {user["user_id"]}{nl}user_name: {user["username"]}{nl}{dr}'
+            listOfUsers.append(newUser)
+
     msg = f'Users list in the database.{nl}{nl.join(listOfUsers)}{nl}Please enter username:'
     btns = [
         [adminButtons.cancel_deploy]
@@ -485,6 +499,13 @@ async def list_users(e):
 # #######################################################< Admin Tasks Handlers >#######################################################
 
 @client.on(events.CallbackQuery(data=b'cancel_deploy'))
+async def cancelDeploy(e):
+    await e.delete()
+    await resetAllVars()
+    await homePage()
+
+
+@client.on(events.CallbackQuery(data=b'cancel_remove'))
 async def cancelDeploy(e):
     await e.delete()
     await resetAllVars()
@@ -502,7 +523,7 @@ async def getDeploySeqName(msg):
     openGetDeploySeqName = False
     deploySeqName = getContent(msg)
     logging.info(f'In getDeloySeqName: getDeloySeqName {deploySeqName}')
-    msg = f'Deploy sequence {deploySeqName} to username {currentSurveyingUser}?'
+    msg = f'Deploy sequence {deploySeqName} to {currentSurveyingUser}?'
     btns = [
         [
             adminButtons.deploy,
@@ -560,7 +581,8 @@ async def homePage():
             adminButtons.deploy_start
         ],
         [
-            adminButtons.exit
+            adminButtons.exit,
+            adminButtons.test
         ]
     ]
     await sendMsg(msg, buttons)
@@ -568,6 +590,7 @@ async def homePage():
 
 @client.on(events.CallbackQuery(data=b'home'))
 async def home(event):
+    await event.delete()
     await resetAllVars()
     await homePage()
 
@@ -575,7 +598,7 @@ async def home(event):
 @client.on(events.CallbackQuery(data=b'deploy'))
 async def deploy(event):
     global currentSurveyingUser
-    logging.info(f'Inside deploy: currentSurveyingUser = {currentSurveyingUser}, ')
+    logging.info(f'Inside deploy: currentSurveyingUser = {currentSurveyingUser}')
     foundSeq = allSeq.find_one({'name': deploySeqName})
     user_id = currentSurveyingUser
     if foundSeq:
@@ -584,8 +607,10 @@ async def deploy(event):
         status.inDeploy = False
         data = f'begin_survey,{deploySeqName}'
         btn = create_button('Start Survey', data)
-        wc_msg = 'Welcome to this.\nThis is blah blah survey!'
+        wc_msg = 'Hello.\nThis is the welcome message for survey!'
         try:
+            if user_id.isdigit():
+                user_id = int(user_id)
             await client.send_message(user_id, wc_msg, buttons=btn)
             await event.answer('Sequence deployed successfully to user!', alert=True)
             await homePage()
@@ -639,9 +664,41 @@ async def new_poll(event):
     openGetSeqName = True
 
 
+async def fGetRemoveSeqName(msg):
+    if msg.message.from_id == conf.ADMIN_ID:
+        global openGetRemoveSeqName
+        return openGetRemoveSeqName
+
+
+@client.on(events.NewMessage(func=fGetRemoveSeqName))
+async def getRemoveSeqName(msg):
+    global openGetRemoveSeqName, removeSeqName
+    openGetRemoveSeqName = False
+    removeSeqName = getContent(msg)
+    foundDoc = allSeq.find_one({'name': removeSeqName})
+    if foundDoc:
+        allSeq.delete_one({'name': removeSeqName})
+        await sendMsg(f'Sequence {removeSeqName} removed from database.')
+    elif not foundDoc:
+        await sendMsg(f'Sorry! The sequence {removeSeqName} does not exist in database.')
+    await homePage()
+
+
 @client.on(events.CallbackQuery(data=b'remove_sequence'))
-async def remove_sequence(event):
-    await event.edit('Thanks for using! Bye!')
+async def remove_sequence(e):
+    global openGetRemoveSeqName
+    found = allSeq.find({})
+    seqNames = []
+    for seq in found:
+        seq = Box(seq)
+        seqNames.append(seq.name)
+    btns = [
+        [
+            adminButtons.cancel_remove
+        ]
+    ]
+    await e.respond(f'{dr}{nl.join(seqNames)}{nl}{nl}Enter the sequence name you want to remove:', buttons=btns)
+    openGetRemoveSeqName = True
 
 
 @client.on(events.CallbackQuery(data=b'exit'))
@@ -652,8 +709,19 @@ async def exit_handler(event):
 
 @client.on(events.CallbackQuery(data=b'test'))
 async def test(event):
-    clear = client.build_reply_markup(Button.switch_inline('Hello', 'qrrr'))
-    await sendMsg('Clear', clear)
+    data = 'test'
+    btn = create_button('Start Survey', data)
+    user_id = 1328567551
+    try:
+        logging.info(f'user_id while deploying: {user_id}')
+        await client.send_message(user_id, 'Hello from try', buttons=btn)
+        # await client.send_message(user_id, wc_msg, buttons=btn)
+        await event.answer('Sequence deployed successfully to user!', alert=True)
+        # await homePage()
+    except errors.rpcerrorlist.UserIsBlockedError:
+        await event.answer('Blocked!!!\nUser has blocked the bot either or not in the bot database yet!', alert=True)
+    await client.send_message(user_id, 'Hello outside')
+
 
 # #######################################################< Message Events >#######################################################
 
