@@ -132,6 +132,10 @@ def getContent(msg):
     return m.message.message
 
 
+def create_button(name, data):
+    return Button.inline(name, data.encode())
+
+
 # #######################################################< Poll Creation >#######################################################
 
 
@@ -312,96 +316,121 @@ async def save_poll(e):
 # #######################################################< Poll Deployment >#######################################################
 
 
-@client.on(events.CallbackQuery(data=b'multi_poll_submit'))
-async def multiPollSubmit(e):
-    global openGetPollResult, pollResExpected
-    global currentPollIndex, pollsList, currentSurveyingUser
-    global pollChosenMultiAnswers
-    print(pollChosenMultiAnswers)
-    poll = Box(pollsList[currentPollIndex])
-    q = poll.question
-    await e.edit(f'{q}{nl}{pollChosenMultiAnswers}')
-    openGetPollResult = False
-    pollResExpected.clear()
-    pollChosenMultiAnswers.clear()
-    currentPollIndex += 1
-    try:
-        pollsList[currentPollIndex]
-        await survey_user()
-    except IndexError:
-        await sendMsg('Thank you for survey!', chat=currentSurveyingUser)
-        currentPollIndex = 0
-        pollsList = []
-        currentSurveyingUser = ''
-        return
+async def getPoll(seqName, poll_index):
+    found = allSeq.find_one({'name': seqName})
+    if found:
+        found = Box(found)
+        pollsList = found.allPolls
+        try:
+            poll = pollsList[poll_index]
+            return Box(poll)
+        except IndexError:
+            return None
 
 
-async def filterPoll(e):
-    if openGetPollResult:
-        if e.data in pollResExpected:
-            return True
+async def createtPoll(seqName, poll_index):
+    poll = await getPoll(seqName, poll_index)
+    if poll:
+        poll = Box(poll)
+        btns = []
+        li = []
+        for an in poll.answers:
+            an = str(an)
+            data = f'isAns,{an},{seqName},{poll_index}'
+            btn = create_button(an, data)
+            li.append(btn)
+            btns.append(li.copy())
+            li.clear()
+        if poll.props.multi_answer:
+            data = f'multi_poll_submit,{seqName},{poll_index}'
+            subBtn = [adminButtons.multi_poll_submit]
+            btns.append(subBtn.copy())
+        return poll.question, btns
+    else:
+        return None, None
+
+
+def multiPollFilter(data):
+    data = data.decode()
+    data = data.split(',')
+    if data[0] == 'multi_poll_submit':
+        return True
     else:
         return False
 
 
-@client.on(events.CallbackQuery(func=filterPoll))
-async def getPollResult(e):
-    global openGetPollResult, pollResExpected, currentPollIndex
-    global pollsList, currentSurveyingUser, pollChosenMultiAnswers
+@client.on(events.CallbackQuery(data=multiPollFilter))
+async def multiPollSubmit(e):
     data = e.data
-    chosenAns = data.decode()
-    poll = Box(pollsList[currentPollIndex])
+    user_id = e.query.user_id
+    seqName = data[1]
+    poll_index = int(data[2])
+    poll_index += 1
+    # TODO: Get the poll and send back the result
+    question, btns = await createtPoll(seqName, poll_index)
+    if question and btns:
+        await sendMsg(question, btns, user_id)
+    else:
+        await sendMsg('Survey end', chat=user_id)
+
+
+def filterPoll(data):
+    data = data.decode()
+    data = data.split(',')
+    if data[0] == 'isAns':
+        return True
+    else:
+        return False
+
+
+@client.on(events.CallbackQuery(data=filterPoll))
+async def getPollResult(e):
+    data = e.data
+    user_id = e.query.from_id
+    data = data.decode()
+    data = data.split(',')
+    chosenAns = data[1]
+    seqName = data[2]
+    poll_index = int(data[3])
+    # TODO: Get poll and apppend answers to db.
+    poll = await getPoll(seqName, poll_index)
+    logging.info(f'{TC.SUCCESS}{poll.question}, {chosenAns}')
     if poll.props.multi_answer:
-        pollChosenMultiAnswers.append(chosenAns)
+        logging.info(f'Multi Poll')
         await e.answer('Choose one or more then submit.')
     else:
-        q = poll.question
-        await e.edit(f'{q}{nl}{chosenAns}')
-        openGetPollResult = False
-        pollResExpected = []
-        currentPollIndex += 1
-        try:
-            pollsList[currentPollIndex]
-            await survey_user()
-        except IndexError:
-            await sendMsg('Thank you for survey!', chat=currentSurveyingUser)
-            currentPollIndex = 0
-            pollsList = []
-            currentSurveyingUser = ''
-            return
+        poll_index += 1
+        question, btns = await createtPoll(seqName, poll_index)
+        if question and btns:
+            await sendMsg(question, btns, user_id)
+        else:
+            await sendMsg('Survey end', user_id)
 
 
-@client.on(events.CallbackQuery(data=b'begin_survey'))
+def beginFilter(data):
+    logging.info(f'Inside beginSurveyFilter...')
+    data = data.decode()
+    data = data.split(',')
+    if data[0] == 'begin_survey':
+        return True
+    else:
+        return False
+
+
+@client.on(events.CallbackQuery(data=beginFilter))
 async def startSurvey(e):
+    data = e.data
+    data = data.decode()
+    data = data.split(',')
+    seqName = data[1]
     await e.edit('Starting the survey now!')
-    await survey_user()
+    await survey_user(e.query.user_id, seqName, 0)
 
 
-async def survey_user():
-    print('starting survey')
-    global openGetPollResult, currentPollIndex, pollsList, pollResExpected, currentSurveyingUser
-    try:
-        poll = pollsList[currentPollIndex]
-        openGetPollResult = True
-    except IndexError:
-        currentPollIndex = 0
-        pollsList = []
-        return
-    poll = Box(poll)
-    btns = []
-    li = []
-    for an in poll.answers:
-        an = str(an)
-        b_an = an.encode()
-        btn = Button.inline(an, b_an)
-        pollResExpected.append(b_an)
-        li.append(btn)
-        btns.append(li.copy())
-        li.clear()
-    if poll.props.multi_answer:
-        subBtn = [adminButtons.multi_poll_submit]
-        btns.append(subBtn.copy())
-    await sendMsg(poll.question, btns, currentSurveyingUser)
+async def survey_user(user_id, seqName, poll_index):
+    question, btns = await getPoll(seqName, poll_index)
+    if question and btns:
+        await sendMsg(question, btns, user_id)
 
 
 @client.on(events.CallbackQuery(data=b'list_users'))
@@ -506,19 +535,18 @@ async def home(event):
 
 @client.on(events.CallbackQuery(data=b'deploy'))
 async def deploy(event):
-    global pollsList, currentSurveyingUser
+    global currentSurveyingUser
     foundSeq = allSeq.find_one({'name': deploySeqName})
+    user_id = currentSurveyingUser
     if foundSeq:
         foundSeq = Box(foundSeq)
-        pollsList = foundSeq.allPolls
-        btn = [
-            [adminButtons.begin_survey]
-        ]
         status.inDeploy = False
+        data = f'begin_survey,{deploySeqName}'
+        btn = create_button('Start Survey', data)
+        wc_msg = 'Welcome to this.\nThis is blah blah survey!'
         try:
-            await client.send_message(currentSurveyingUser, 'Welcome to this.\nThis is blah blah survey!', buttons=btn)
+            await client.send_message(user_id, wc_msg, buttons=btn)
             await event.answer('Sequence deployed successfully to user!', alert=True)
-            # await home(event)
             await homePage()
         except errors.rpcerrorlist.UserIsBlockedError:
             await event.answer('Blocked!!!\nUser has blocked the bot!', alert=True)
@@ -615,3 +643,4 @@ except KeyboardInterrupt:
     print("\nQuiting bot!")
 except errors.rpcerrorlist.ApiIdInvalidError:
     print("Invalid API_ID/API_HASH")
+
