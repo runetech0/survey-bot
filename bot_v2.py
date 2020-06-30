@@ -70,7 +70,8 @@ TC = Box({
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s :: %(levelname)s :: %(message)s')
 
-client = TelegramClient('new', api_id, api_hash, proxy=(socks.SOCKS5, conf.SOCKS5_SERVER, conf.SOCKS5_PORT))
+client = TelegramClient('new', api_id, api_hash, proxy=(
+    socks.SOCKS5, conf.SOCKS5_SERVER, conf.SOCKS5_PORT))
 
 # #######################################################< Database Setup >#######################################################
 
@@ -395,8 +396,13 @@ async def getPollResult(e):
     # TODO: Get poll and apppend answers to db.
     poll = await getPoll(seqName, poll_index)
     logging.info(f'{TC.SUCCESS}{poll.question}, {chosenAns}')
+    question = poll.question
+    found = allUsers.find_one({'user_id': user_id})
+    user = found.copy()
+    user.pop('_id')
     if poll.props.multi_answer:
         logging.info(f'Multi Poll')
+
         await e.answer('Choose one or more then submit.')
     else:
         poll_index += 1
@@ -625,13 +631,51 @@ async def filterAdmin(e):
         return False
 
 
-@client.on(events.NewMessage(pattern='/start'))
+@client.on(events.NewMessage(func=filterAdmin, pattern='/start'))
 async def adminHandler(msg):
-    en = await client.get_input_entity(msg.from_id)
-    print(en)
     await resetAllVars()
     await homePage()
-    await msg.delete()
+
+
+@client.on(events.NewMessage(pattern='/start'))
+async def userHandler(msg):
+    user = await client.get_entity(msg.from_id)
+    print(user.stringify())
+    foundUser = allUsers.find_one({
+        'user_id': user.id
+    })
+    if not foundUser:
+        user_to_insert = {
+            'first_name': user.first_name,
+            'user_id': user.id,
+            'username': user.username,
+            'surveys_taken': [],
+        }
+        allUsers.insert_one(user_to_insert)
+        await sendMsg(wc_msg, chat=user.id)
+    else:
+        await sendMsg('Welcome back!')
+    username = 'Rehman'
+    seqName = 'Seq2'
+    index = 0
+    answer = 'Working'
+    allUsers.insert_one(user)
+    foundUser = allUsers.find_one({
+        'username': username
+    })
+    user = foundUser.copy()
+    user.pop('_id')
+    surveys_taken = user['surveys_taken']
+    for sur in surveys_taken:
+        if sur['survey_name'] == seqName:
+            survey = sur
+    try:
+        poll = survey['polls'][index]
+    except IndexError:
+        # insert new poll
+        pass
+
+    allUsers.update_one({'username': username}, {'$set': user})
 
 
 try:
@@ -643,4 +687,3 @@ except KeyboardInterrupt:
     print("\nQuiting bot!")
 except errors.rpcerrorlist.ApiIdInvalidError:
     print("Invalid API_ID/API_HASH")
-
