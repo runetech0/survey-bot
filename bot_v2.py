@@ -163,7 +163,8 @@ async def getSeqName(msg):
 
 
 async def answerFilter(msg):
-    return expectingAnswers
+    if msg.message.from_id == conf.ADMIN_ID:
+        return expectingAnswers
 
 
 @client.on(events.NewMessage(func=answerFilter))
@@ -183,7 +184,8 @@ async def getAnswers(msg):
 
 
 async def questionFilter(msg):
-    return expectingQuestion
+    if msg.message.from_id == conf.ADMIN_ID:
+        return expectingQuestion
 
 
 @client.on(events.NewMessage(func=questionFilter))
@@ -329,8 +331,9 @@ async def getPoll(seqName, poll_index):
             return None
 
 
-async def createtPoll(seqName, poll_index):
+async def createPoll(seqName, poll_index):
     poll = await getPoll(seqName, poll_index)
+    logging.info(f'Creating poll with seqName {seqName} and Poll_index {poll_index}')
     if poll:
         poll = Box(poll)
         btns = []
@@ -344,7 +347,7 @@ async def createtPoll(seqName, poll_index):
             li.clear()
         if poll.props.multi_answer:
             data = f'multi_poll_submit,{seqName},{poll_index}'
-            subBtn = [adminButtons.multi_poll_submit]
+            subBtn = [create_button('Submit Poll', data)]
             btns.append(subBtn.copy())
         return poll.question, btns
     else:
@@ -362,13 +365,15 @@ def multiPollFilter(data):
 
 @client.on(events.CallbackQuery(data=multiPollFilter))
 async def multiPollSubmit(e):
-    data = e.data
     user_id = e.query.user_id
+    data = e.data
+    data = data.decode()
+    data = data.split(',')
+    logging.info(f'{TC.SUCCESS}Data in multipoll: {data}')
     seqName = data[1]
     poll_index = int(data[2])
     poll_index += 1
-    # TODO: Get the poll and send back the result
-    question, btns = await createtPoll(seqName, poll_index)
+    question, btns = await createPoll(seqName, poll_index)
     if question and btns:
         await sendMsg(question, btns, user_id)
     else:
@@ -387,30 +392,58 @@ def filterPoll(data):
 @client.on(events.CallbackQuery(data=filterPoll))
 async def getPollResult(e):
     data = e.data
-    user_id = e.query.from_id
+    user_id = e.query.user_id
     data = data.decode()
     data = data.split(',')
     chosenAns = data[1]
     seqName = data[2]
     poll_index = int(data[3])
-    # TODO: Get poll and apppend answers to db.
     poll = await getPoll(seqName, poll_index)
     logging.info(f'{TC.SUCCESS}{poll.question}, {chosenAns}')
     question = poll.question
     found = allUsers.find_one({'user_id': user_id})
     user = found.copy()
     user.pop('_id')
+    surveys_taken = user['surveys_taken']
+    if seqName not in surveys_taken.keys():
+        surveys_taken[seqName] = []
     if poll.props.multi_answer:
-        logging.info(f'Multi Poll')
-
+        try:
+            # If poll is already in the list.
+            pollsList = surveys_taken[seqName]
+            user_poll = pollsList[poll_index]
+            user_poll['answers'].append(chosenAns)
+            logging.info('Updated poll seq and appended a multi poll ans')
+        except IndexError:
+            # If poll is not already in the list.
+            logging.info('Raised index error in get poll answer: multi block')
+            poll = {
+                'question': question,
+                'answers': [chosenAns]
+            }
+            pollsList.append(poll)
+            logging.info('Created new poll and stored multiAns.')
+        # Save the updated user to database.
+        allUsers.find_one_and_update({'user_id': user_id}, {'$set': user})
         await e.answer('Choose one or more then submit.')
     else:
+        # If poll is single answer poll.
+        logging.info('Storing single poll ans.')
+        poll = {
+            'question': question,
+            'answers': [chosenAns]
+        }
+        pollsList = surveys_taken[seqName]
+        pollsList.append(poll)
+        # Save updated user to db.
+        allUsers.find_one_and_update({'user_id': user_id}, {'$set': user})
+        logging.info('Stored single poll ans.')
         poll_index += 1
-        question, btns = await createtPoll(seqName, poll_index)
+        question, btns = await createPoll(seqName, poll_index)
         if question and btns:
             await sendMsg(question, btns, user_id)
         else:
-            await sendMsg('Survey end', user_id)
+            await sendMsg('Survey end', chat=user_id)
 
 
 def beginFilter(data):
@@ -434,7 +467,7 @@ async def startSurvey(e):
 
 
 async def survey_user(user_id, seqName, poll_index):
-    question, btns = await getPoll(seqName, poll_index)
+    question, btns = await createPoll(seqName, poll_index)
     if question and btns:
         await sendMsg(question, btns, user_id)
 
@@ -459,14 +492,16 @@ async def cancelDeploy(e):
 
 
 async def fGetDeploySeqName(msg):
-    return openGetDeploySeqName
+    if msg.message.from_id == conf.ADMIN_ID:
+        return openGetDeploySeqName
 
 
 @client.on(events.NewMessage(func=fGetDeploySeqName))
 async def getDeploySeqName(msg):
     global deploySeqName, openGetDeploySeqName
-    deploySeqName = getContent(msg)
     openGetDeploySeqName = False
+    deploySeqName = getContent(msg)
+    logging.info(f'In getDeloySeqName: getDeloySeqName {deploySeqName}')
     msg = f'Deploy sequence {deploySeqName} to username {currentSurveyingUser}?'
     btns = [
         [
@@ -478,10 +513,8 @@ async def getDeploySeqName(msg):
 
 
 async def fGetSurveyUserName(e):
-    if openGetSurveyUserName:
-        return True
-    else:
-        return False
+    if e.message.from_id == conf.ADMIN_ID:
+        return openGetSurveyUserName
 
 
 @client.on(events.NewMessage(func=fGetSurveyUserName))
@@ -542,10 +575,12 @@ async def home(event):
 @client.on(events.CallbackQuery(data=b'deploy'))
 async def deploy(event):
     global currentSurveyingUser
+    logging.info(f'Inside deploy: currentSurveyingUser = {currentSurveyingUser}, ')
     foundSeq = allSeq.find_one({'name': deploySeqName})
     user_id = currentSurveyingUser
     if foundSeq:
         foundSeq = Box(foundSeq)
+        logging.info(f'Found Seq: {foundSeq["name"]}')
         status.inDeploy = False
         data = f'begin_survey,{deploySeqName}'
         btn = create_button('Start Survey', data)
@@ -639,43 +674,22 @@ async def adminHandler(msg):
 
 @client.on(events.NewMessage(pattern='/start'))
 async def userHandler(msg):
-    user = await client.get_entity(msg.from_id)
-    print(user.stringify())
     foundUser = allUsers.find_one({
-        'user_id': user.id
+        'user_id': msg.from_id
     })
     if not foundUser:
+        user = await client.get_entity(msg.from_id)
+        wc_msg = 'Welcome to survey bot.\n You are now registered at bot.\nPlease ask admins.'
         user_to_insert = {
             'first_name': user.first_name,
             'user_id': user.id,
             'username': user.username,
-            'surveys_taken': [],
+            'surveys_taken': {},
         }
         allUsers.insert_one(user_to_insert)
         await sendMsg(wc_msg, chat=user.id)
     else:
-        await sendMsg('Welcome back!')
-    username = 'Rehman'
-    seqName = 'Seq2'
-    index = 0
-    answer = 'Working'
-    allUsers.insert_one(user)
-    foundUser = allUsers.find_one({
-        'username': username
-    })
-    user = foundUser.copy()
-    user.pop('_id')
-    surveys_taken = user['surveys_taken']
-    for sur in surveys_taken:
-        if sur['survey_name'] == seqName:
-            survey = sur
-    try:
-        poll = survey['polls'][index]
-    except IndexError:
-        # insert new poll
-        pass
-
-    allUsers.update_one({'username': username}, {'$set': user})
+        await sendMsg('Welcome back!', chat=msg.from_id)
 
 
 try:
