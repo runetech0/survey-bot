@@ -1,1 +1,4 @@
 conf.py
+tests.py
+*.zip
+*.session
