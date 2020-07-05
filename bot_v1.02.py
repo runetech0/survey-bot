@@ -2,7 +2,6 @@ from telethon import TelegramClient, Button, events, errors
 from telethon.events import StopPropagation
 import socks
 import conf
-import shelve
 import logging
 from box import Box
 from pymongo import MongoClient
@@ -502,7 +501,7 @@ async def cancelDeploy(e):
 
 
 @client.on(events.CallbackQuery(data=b'cancel_remove'))
-async def cancelDeploy(e):
+async def cancel_remove(e):
     await e.delete()
     await resetAllVars()
     await homePage()
