@@ -1,4 +1,5 @@
 from telethon import TelegramClient, Button, events, errors
+from telethon.events import StopPropagation
 import socks
 import conf
 import shelve
@@ -166,6 +167,7 @@ async def getSeqName(msg):
         ]
     ]
     await msg.respond(f'{dr}Select the type of poll.', buttons=btns)
+    raise StopPropagation
 
 
 async def answerFilter(msg):
@@ -187,6 +189,7 @@ async def getAnswers(msg):
     expectingAnswers = False
     await msg.respond(f'{dr}Sequence Name: {poll.seqName}{nl}Question: {poll.question}{nl}\
                         Answers: {nl}{nl.join(poll.answers)}', buttons=[adminButtons.discard, adminButtons.save])
+    raise StopPropagation
 
 
 async def questionFilter(msg):
@@ -207,6 +210,7 @@ async def questionHandler(msg):
         ]
     ]
     await msg.respond(f'{dr}Enter the answers separated with commas each answer!', buttons=btns)
+    raise StopPropagation
 
 
 @client.on(events.CallbackQuery(data=b'finish_seq'))
@@ -306,7 +310,6 @@ async def save_poll(e):
         msg = f'Poll added to sequence {foundSeq.name}.'
     else:
         allPolls.append(newPoll)
-        print(allPolls)
         allSeq.insert_one({
             'name': poll.seqName,
             'allPolls': allPolls
@@ -339,7 +342,6 @@ async def getPoll(seqName, poll_index):
 
 async def createPoll(seqName, poll_index):
     poll = await getPoll(seqName, poll_index)
-    logging.info(f'Creating poll with seqName {seqName} and Poll_index {poll_index}')
     if poll:
         poll = Box(poll)
         btns = []
@@ -376,7 +378,6 @@ async def multiPollSubmit(e):
     data = e.data
     data = data.decode()
     data = data.split(',')
-    logging.info(f'{TC.SUCCESS}Data in multipoll: {data}')
     seqName = data[1]
     poll_index = int(data[2])
     poll_index += 1
@@ -406,7 +407,6 @@ async def getPollResult(e):
     seqName = data[2]
     poll_index = int(data[3])
     poll = await getPoll(seqName, poll_index)
-    logging.info(f'{TC.SUCCESS}{poll.question}, {chosenAns}')
     question = poll.question
     found = allUsers.find_one({'user_id': user_id})
     user = found.copy()
@@ -420,23 +420,19 @@ async def getPollResult(e):
             pollsList = surveys_taken[seqName]
             user_poll = pollsList[poll_index]
             user_poll['answers'].append(chosenAns)
-            logging.info('Updated poll seq and appended a multi poll ans')
         except IndexError:
             # If poll is not already in the list.
-            logging.info('Raised index error in get poll answer: multi block')
             poll = {
                 'question': question,
                 'answers': [chosenAns]
             }
             pollsList.append(poll)
-            logging.info('Created new poll and stored multiAns.')
         # Save the updated user to database.
         allUsers.find_one_and_update({'user_id': user_id}, {'$set': user})
         await e.answer('Choose one or more then submit.')
     else:
         await e.edit('Submitted!')
         # If poll is single answer poll.
-        logging.info('Storing single poll ans.')
         poll = {
             'question': question,
             'answers': [chosenAns]
@@ -445,17 +441,15 @@ async def getPollResult(e):
         pollsList.append(poll)
         # Save updated user to db.
         allUsers.find_one_and_update({'user_id': user_id}, {'$set': user})
-        logging.info('Stored single poll ans.')
         poll_index += 1
         question, btns = await createPoll(seqName, poll_index)
         if question and btns:
             await sendMsg(question, btns, user_id)
         else:
-            await sendMsg('Survey end', chat=user_id)
+            await sendMsg('Survey ends here!!\nThank you!', chat=user_id)
 
 
 def beginFilter(data):
-    logging.info(f'Inside beginSurveyFilter...')
     data = data.decode()
     data = data.split(',')
     if data[0] == 'begin_survey':
@@ -478,6 +472,8 @@ async def survey_user(user_id, seqName, poll_index):
     question, btns = await createPoll(seqName, poll_index)
     if question and btns:
         await sendMsg(question, btns, user_id)
+    else:
+        await sendMsg('Invalid Sequence Name / Username!')
 
 
 @client.on(events.CallbackQuery(data=b'list_users'))
@@ -522,7 +518,6 @@ async def getDeploySeqName(msg):
     global deploySeqName, openGetDeploySeqName
     openGetDeploySeqName = False
     deploySeqName = getContent(msg)
-    logging.info(f'In getDeloySeqName: getDeloySeqName {deploySeqName}')
     msg = f'Deploy sequence {deploySeqName} to {currentSurveyingUser}?'
     btns = [
         [
@@ -531,6 +526,7 @@ async def getDeploySeqName(msg):
         ]
     ]
     await sendMsg(msg, btns)
+    raise StopPropagation
 
 
 async def fGetSurveyUserName(e):
@@ -554,6 +550,7 @@ async def getSurveyUserName(e):
     await sendMsg(msg, btns)
     openGetDeploySeqName = True
     openGetSurveyUserName = False
+    raise StopPropagation
 
 
 @client.on(events.CallbackQuery(data=b'deploy_start'))
@@ -581,8 +578,8 @@ async def homePage():
             adminButtons.deploy_start
         ],
         [
-            adminButtons.exit,
-            adminButtons.test
+            adminButtons.exit
+            # adminButtons.test
         ]
     ]
     await sendMsg(msg, buttons)
@@ -598,12 +595,10 @@ async def home(event):
 @client.on(events.CallbackQuery(data=b'deploy'))
 async def deploy(event):
     global currentSurveyingUser
-    logging.info(f'Inside deploy: currentSurveyingUser = {currentSurveyingUser}')
     foundSeq = allSeq.find_one({'name': deploySeqName})
     user_id = currentSurveyingUser
     if foundSeq:
         foundSeq = Box(foundSeq)
-        logging.info(f'Found Seq: {foundSeq["name"]}')
         status.inDeploy = False
         data = f'begin_survey,{deploySeqName}'
         btn = create_button('Start Survey', data)
@@ -682,6 +677,7 @@ async def getRemoveSeqName(msg):
     elif not foundDoc:
         await sendMsg(f'Sorry! The sequence {removeSeqName} does not exist in database.')
     await homePage()
+    raise StopPropagation
 
 
 @client.on(events.CallbackQuery(data=b'remove_sequence'))
@@ -713,7 +709,7 @@ async def test(event):
     btn = create_button('Start Survey', data)
     user_id = 1328567551
     try:
-        logging.info(f'user_id while deploying: {user_id}')
+        # logging.info(f'user_id while deploying: {user_id}')
         await client.send_message(user_id, 'Hello from try', buttons=btn)
         # await client.send_message(user_id, wc_msg, buttons=btn)
         await event.answer('Sequence deployed successfully to user!', alert=True)
@@ -738,6 +734,7 @@ async def filterAdmin(e):
 async def adminHandler(msg):
     await resetAllVars()
     await homePage()
+    raise StopPropagation
 
 
 @client.on(events.NewMessage(pattern='/start'))
@@ -758,7 +755,7 @@ async def userHandler(msg):
         await sendMsg(wc_msg, chat=user.id)
     else:
         await sendMsg('Welcome back!', chat=msg.from_id)
-
+    raise StopPropagation
 
 try:
     client.start(bot_token=bot_token)
