@@ -13,6 +13,7 @@ from colorama import Back, Fore, Style, init
 api_id = conf.API_ID
 api_hash = conf.API_HASH
 bot_token = conf.BOT_TOKEN
+session_file = 'bot'
 
 expectingQuestion = False
 expectingAnswers = False
@@ -73,7 +74,7 @@ TC = Box({
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s :: %(levelname)s :: %(message)s')
 
-client = TelegramClient('new', api_id, api_hash, proxy=(
+client = TelegramClient(session_file, api_id, api_hash, proxy=(
     socks.SOCKS5, conf.SOCKS5_SERVER, conf.SOCKS5_PORT))
 
 # #######################################################< Database Setup >#######################################################
