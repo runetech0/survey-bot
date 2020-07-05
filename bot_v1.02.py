@@ -24,6 +24,7 @@ openGetDeploySeqName = False
 openGetRemoveSeqName = False
 removeSeqName = None
 deploySeqName = None
+prev_ev = None
 pollResExpected = []
 pollChosenMultiAnswers = []
 currentPollIndex = 0
@@ -90,7 +91,7 @@ allUsers = db.allUsers      # Users collection
 
 async def resetAllVars():
     global expectingQuestion, expectingAnswers, openGetSeqName, openGetPollResult
-    global openGetSurveyUserName, openGetDeploySeqName, deploySeqName
+    global openGetSurveyUserName, openGetDeploySeqName, deploySeqName, prev_ev
     global pollResExpected, pollChosenMultiAnswers, currentPollIndex, removeSeqName
     global pollsList, currentSurveyingUser, poll, status, openGetRemoveSeqName
     expectingQuestion = False
@@ -102,6 +103,7 @@ async def resetAllVars():
     openGetRemoveSeqName = False
     removeSeqName = None
     deploySeqName = None
+    prev_ev = None
     pollResExpected = []
     pollChosenMultiAnswers = []
     currentPollIndex = 0
@@ -167,6 +169,8 @@ async def getSeqName(msg):
         ]
     ]
     await msg.respond(f'{dr}Select the type of poll.', buttons=btns)
+    if prev_ev:
+        await prev_ev.delete()
     raise StopPropagation
 
 
@@ -177,7 +181,7 @@ async def answerFilter(msg):
 
 @client.on(events.NewMessage(func=answerFilter))
 async def getAnswers(msg):
-    global poll, expectingAnswers
+    global poll, expectingAnswers, prev_ev
     m = Box(msg.to_dict())
     ans = m.message.message
     poll.answers = ans.split(',')
@@ -189,6 +193,8 @@ async def getAnswers(msg):
     expectingAnswers = False
     await msg.respond(f'{dr}Sequence Name: {poll.seqName}{nl}Question: {poll.question}{nl}\
                         Answers: {nl}{nl.join(poll.answers)}', buttons=[adminButtons.discard, adminButtons.save])
+    if prev_ev:
+        await prev_ev.delete()
     raise StopPropagation
 
 
@@ -199,7 +205,7 @@ async def questionFilter(msg):
 
 @client.on(events.NewMessage(func=questionFilter))
 async def questionHandler(msg):
-    global poll, expectingQuestion, expectingAnswers
+    global poll, expectingQuestion, expectingAnswers, prev_ev
     m = Box(msg.to_dict())
     poll.question = m.message.message
     expectingQuestion = False
@@ -209,7 +215,9 @@ async def questionHandler(msg):
             adminButtons.discard
         ]
     ]
-    await msg.respond(f'{dr}Enter the answers separated with commas each answer!', buttons=btns)
+    if prev_ev:
+        await prev_ev.delete()
+    prev_ev = await msg.respond(f'{dr}Enter the answers separated with commas each answer!', buttons=btns)
     raise StopPropagation
 
 
@@ -259,7 +267,7 @@ async def poll_discard(event):
 
 @client.on(events.CallbackQuery(data=b'single_answer'))
 async def single_answer(event):
-    global expectingQuestion, poll
+    global expectingQuestion, poll, prev_ev
     if 'props' not in poll.keys():
         poll.props = Box({})
     poll.props.single_answer = True
@@ -270,12 +278,12 @@ async def single_answer(event):
             adminButtons.discard
         ]
     ]
-    await event.edit(f'{dr}Send the question for the poll.', buttons=btns)
+    prev_ev = await event.edit(f'{dr}Enter the question for the poll.', buttons=btns)
 
 
 @client.on(events.CallbackQuery(data=b'multi_answer'))
 async def multi_answer(event):
-    global expectingQuestion, poll
+    global expectingQuestion, poll, prev_ev
     if 'props' not in poll.keys():
         poll.props = Box({})
     poll.props.multi_answer = True
@@ -286,7 +294,7 @@ async def multi_answer(event):
             adminButtons.discard
         ]
     ]
-    await event.edit(f'{dr}Send the question for the poll.', buttons=btns)
+    prev_ev = await event.edit(f'{dr}Enter the question for the poll.', buttons=btns)
 
 
 @client.on(events.CallbackQuery(data=b'save_poll'))
@@ -515,7 +523,7 @@ async def fGetDeploySeqName(msg):
 
 @client.on(events.NewMessage(func=fGetDeploySeqName))
 async def getDeploySeqName(msg):
-    global deploySeqName, openGetDeploySeqName
+    global deploySeqName, openGetDeploySeqName, prev_ev
     openGetDeploySeqName = False
     deploySeqName = getContent(msg)
     msg = f'Deploy sequence {deploySeqName} to {currentSurveyingUser}?'
@@ -525,7 +533,9 @@ async def getDeploySeqName(msg):
             adminButtons.cancel_deploy
         ]
     ]
-    await sendMsg(msg, btns)
+    if prev_ev:
+        await prev_ev.delete()
+    prev_ev = await sendMsg(msg, btns)
     raise StopPropagation
 
 
@@ -537,7 +547,7 @@ async def fGetSurveyUserName(e):
 @client.on(events.NewMessage(func=fGetSurveyUserName))
 async def getSurveyUserName(e):
     global currentSurveyingUser, openGetSurveyUserName
-    global openGetDeploySeqName
+    global openGetDeploySeqName, prev_ev
     currentSurveyingUser = getContent(e)
     btns = [
         [
@@ -547,7 +557,9 @@ async def getSurveyUserName(e):
     ]
     status.inDeploy = True
     msg = 'Enter the sequence name to deploy?'
-    await sendMsg(msg, btns)
+    if prev_ev:
+        await prev_ev.delete()
+    prev_ev = await sendMsg(msg, btns)
     openGetDeploySeqName = True
     openGetSurveyUserName = False
     raise StopPropagation
@@ -555,7 +567,7 @@ async def getSurveyUserName(e):
 
 @client.on(events.CallbackQuery(data=b'deploy_start'))
 async def deploy_start(event):
-    global openGetSurveyUserName
+    global openGetSurveyUserName, prev_ev
     btns = [
         [
             adminButtons.list_users,
@@ -563,10 +575,11 @@ async def deploy_start(event):
         ]
     ]
     openGetSurveyUserName = True
-    await event.edit('Please enter username of the user you want to deploy the sequence.', buttons=btns)
+    prev_ev = await event.edit('Please enter username of the user you want to deploy the sequence.', buttons=btns)
 
 
 async def homePage():
+    global prev_ev
     msg = f'{dr}\nAdmin pannel\n{dr}'
     buttons = [
         [
@@ -582,7 +595,7 @@ async def homePage():
             # adminButtons.test
         ]
     ]
-    await sendMsg(msg, buttons)
+    prev_ev = await sendMsg(msg, buttons)
 
 
 @client.on(events.CallbackQuery(data=b'home'))
@@ -594,7 +607,9 @@ async def home(event):
 
 @client.on(events.CallbackQuery(data=b'deploy'))
 async def deploy(event):
-    global currentSurveyingUser
+    global currentSurveyingUser, prev_ev
+    if prev_ev:
+        await prev_ev.delete()
     foundSeq = allSeq.find_one({'name': deploySeqName})
     user_id = currentSurveyingUser
     if foundSeq:
@@ -647,7 +662,7 @@ async def list_sequences(e):
 
 @client.on(events.CallbackQuery(data=b'new_poll'))
 async def new_poll(event):
-    global openGetSeqName
+    global openGetSeqName, prev_ev
     btns = [
         [
             adminButtons.discard,
@@ -655,7 +670,7 @@ async def new_poll(event):
         ]
     ]
     status.inPollCreate = True
-    await event.edit(f'{dr}Enter the sequence name.', buttons=btns)
+    prev_ev = await event.edit(f'{dr}Enter the sequence name.', buttons=btns)
     openGetSeqName = True
 
 
@@ -667,7 +682,7 @@ async def fGetRemoveSeqName(msg):
 
 @client.on(events.NewMessage(func=fGetRemoveSeqName))
 async def getRemoveSeqName(msg):
-    global openGetRemoveSeqName, removeSeqName
+    global openGetRemoveSeqName, removeSeqName, prev_ev
     openGetRemoveSeqName = False
     removeSeqName = getContent(msg)
     foundDoc = allSeq.find_one({'name': removeSeqName})
@@ -676,13 +691,15 @@ async def getRemoveSeqName(msg):
         await sendMsg(f'Sequence {removeSeqName} removed from database.')
     elif not foundDoc:
         await sendMsg(f'Sorry! The sequence {removeSeqName} does not exist in database.')
+    if prev_ev:
+        await prev_ev.delete()
     await homePage()
     raise StopPropagation
 
 
 @client.on(events.CallbackQuery(data=b'remove_sequence'))
 async def remove_sequence(e):
-    global openGetRemoveSeqName
+    global openGetRemoveSeqName, prev_ev
     found = allSeq.find({})
     seqNames = []
     for seq in found:
@@ -693,14 +710,16 @@ async def remove_sequence(e):
             adminButtons.cancel_remove
         ]
     ]
-    await e.respond(f'{dr}{nl.join(seqNames)}{nl}{nl}Enter the sequence name you want to remove:', buttons=btns)
+    if prev_ev:
+        await prev_ev.delete()
+    prev_ev = await e.respond(f'{dr}{nl.join(seqNames)}{nl}{nl}Enter the sequence name you want to remove:', buttons=btns)
     openGetRemoveSeqName = True
 
 
 @client.on(events.CallbackQuery(data=b'exit'))
 async def exit_handler(event):
     await resetAllVars()
-    await event.delete()
+    await event.edit('Good Bye!')
 
 
 @client.on(events.CallbackQuery(data=b'test'))
